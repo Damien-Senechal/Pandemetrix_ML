@@ -1,0 +1,280 @@
+# .github/workflows/ci.yml
+name: COVID-19 API CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch: # Permet déclenchement manuel
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Job 1: Tests unitaires et linting
+  tests:
+    name: Tests & Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov flake8 black isort
+        
+    - name: Code quality checks
+      run: |
+        echo "🔍 Checking code formatting..."
+        black --check --diff .
+        echo "📋 Checking import sorting..."
+        isort --check-only --diff .
+        echo "🔧 Running linter..."
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        
+    - name: Run unit tests
+      run: |
+        pytest tests/ -v --cov=app --cov-report=xml --cov-report=term-missing
+        
+    - name: Upload coverage to Codecov
+      if: github.event_name == 'push'
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+
+  # Job 2: Build et test Docker
+  docker-test:
+    name: Docker Build & Integration Tests
+    runs-on: ubuntu-latest
+    needs: tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Cache Docker layers
+      uses: actions/cache@v3
+      with:
+        path: /tmp/.buildx-cache
+        key: ${{ runner.os }}-buildx-${{ github.sha }}
+        restore-keys: |
+          ${{ runner.os }}-buildx-
+          
+    - name: Build Docker image for testing
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: covid-api-test:latest
+        cache-from: type=local,src=/tmp/.buildx-cache
+        cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+        
+    - name: Move cache
+      run: |
+        rm -rf /tmp/.buildx-cache
+        mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+        
+    - name: Make test script executable
+      run: chmod +x scripts/test_docker_isolated.sh
+      
+    - name: Run Docker integration tests
+      env:
+        API_BASE_URL: http://localhost:6666
+      run: |
+        echo "🐳 Running isolated Docker tests..."
+        ./scripts/test_docker_isolated.sh
+        
+    - name: Collect test artifacts
+      if: failure()
+      run: |
+        mkdir -p test-artifacts
+        docker logs covid-api-test-isolated > test-artifacts/docker-logs.txt 2>&1 || true
+        docker inspect covid-api-test-isolated > test-artifacts/docker-inspect.json 2>&1 || true
+        
+    - name: Upload test artifacts
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-artifacts-${{ github.run_number }}
+        path: test-artifacts/
+        retention-days: 7
+
+  # Job 3: Security scan
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    needs: tests
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Job 4: Build et push image (seulement sur main)
+  build-push:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    needs: [tests, docker-test, security]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    
+    permissions:
+      contents: read
+      packages: write
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Job 5: Performance tests (optionnel)
+  performance:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: docker-test
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup k6
+      run: |
+        sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 379CE192D401AB61
+        echo "deb https://dl.bintray.com/loadimpact/deb stable main" | sudo tee -a /etc/apt/sources.list
+        sudo apt-get update
+        sudo apt-get install k6
+        
+    - name: Create k6 performance test
+      run: |
+        cat > performance-test.js << 'EOF'
+        import http from 'k6/http';
+        import { check } from 'k6';
+        
+        export let options = {
+          stages: [
+            { duration: '30s', target: 10 },
+            { duration: '1m', target: 10 },
+            { duration: '30s', target: 0 },
+          ],
+        };
+        
+        export default function() {
+          let response = http.get('http://localhost:6666/api/v1/covid/health');
+          check(response, {
+            'status is 200': (r) => r.status === 200,
+            'response time < 200ms': (r) => r.timings.duration < 200,
+          });
+        }
+        EOF
+        
+    - name: Start API for performance test
+      run: |
+        docker run -d --name perf-test-api -p 6666:5000 covid-api-test:latest
+        sleep 10
+        
+    - name: Run performance tests
+      run: k6 run performance-test.js
+      
+    - name: Cleanup performance test
+      if: always()
+      run: docker rm -f perf-test-api
+
+  # Job 6: Déploiement (placeholder)
+  deploy:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-push]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: staging
+    
+    steps:
+    - name: Deploy placeholder
+      run: |
+        echo "🚀 Déploiement en cours..."
+        echo "Image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        echo "TODO: Intégrer avec ton provider cloud (AWS/GCP/Azure)"
+
+  # Job de notification
+  notify:
+    name: Notify Results
+    runs-on: ubuntu-latest
+    needs: [tests, docker-test, security]
+    if: always()
+    
+    steps:
+    - name: Notify on success
+      if: ${{ needs.tests.result == 'success' && needs.docker-test.result == 'success' && needs.security.result == 'success' }}
+      run: |
+        echo "✅ Pipeline réussi!"
+        echo "Commit: ${{ github.sha }}"
+        echo "Branch: ${{ github.ref_name }}"
+        
+    - name: Notify on failure
+      if: ${{ needs.tests.result == 'failure' || needs.docker-test.result == 'failure' || needs.security.result == 'failure' }}
+      run: |
+        echo "❌ Pipeline échoué!"
+        echo "Tests: ${{ needs.tests.result }}"
+        echo "Docker: ${{ needs.docker-test.result }}"
+        echo "Security: ${{ needs.security.result }}"
