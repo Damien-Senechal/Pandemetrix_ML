@@ -38,7 +38,7 @@ def load_model_and_metadata():
         return False
 
 def prepare_features_for_prediction(data):
-    """Prépare les features pour prédiction - VERSION SIMPLIFIÉE"""
+    """Prépare les features pour prédiction"""
     if not metadata:
         raise ValueError("Métadonnées du modèle non chargées")
     

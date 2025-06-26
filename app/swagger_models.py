@@ -1,8 +1,8 @@
-# app/swagger_models.py - VERSION FEATURES RÉDUITES
+# app/swagger_models.py
 from flask_restx import fields
 
 def create_swagger_models(api):
-    """Définit les modèles Swagger pour la documentation - VERSION SIMPLIFIÉE"""
+    """Définit les modèles Swagger pour la documentation"""
     
     # Modèle pour une requête de prédiction simple (UNIQUEMENT 5 features)
     prediction_input = api.model('PredictionInput', {

@@ -1,4 +1,4 @@
-# models.py
+# app/models.py
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split, GridSearchCV
@@ -61,7 +61,7 @@ def load_and_merge_data():
 
 def prepare_data(df_merge):
     """
-    Prépare et encode les données - VERSION FEATURES RÉDUITES
+    Prépare et encode les données
     """
     print("Préparation et encodage des données...")
     
@@ -108,7 +108,7 @@ def prepare_data(df_merge):
 
 def prepare_features(data_encoded):
     """
-    Prépare les features - VERSION RÉDUITE
+    Prépare les features
     """
     print("Préparation des features...")
     
@@ -257,7 +257,7 @@ def train_polynomial_all_countries(X_train, X_test, y_train, y_test):
 
 def save_model_and_metadata(poly_results, features, baseline_results, countries_list):
     """
-    Sauvegarde le modèle et ses métadonnées - VERSION FEATURES RÉDUITES
+    Sauvegarde le modèle et ses métadonnées
     """
     print("Sauvegarde du modèle...")
     

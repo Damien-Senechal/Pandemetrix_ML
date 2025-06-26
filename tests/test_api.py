@@ -70,7 +70,7 @@ class TestAPI:
             "country": "PaysInexistant123",
             "date": "2023-01-15",
             "new_cases": 50000,
-            "people_vaccinated": 45000000,
+            "people_vaccinated": 4500000,
             "new_tests": 200000,
             "daily_occupancy_hosp": 15000
         }
