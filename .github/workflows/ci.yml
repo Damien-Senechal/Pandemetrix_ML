@@ -16,35 +16,16 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Build Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        tags: covid-api-test:latest
-        load: true
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        
     - name: Make test script executable
       run: chmod +x scripts/test_docker_isolated.sh
       
-    - name: Run integration tests
+    - name: Run Docker tests
       run: ./scripts/test_docker_isolated.sh
       
-    - name: Collect logs on failure
+    - name: Show logs on failure
       if: failure()
       run: |
-        mkdir -p logs
-        docker logs covid-api-test-isolated > logs/api.log 2>&1 || true
-        docker ps -a > logs/containers.log 2>&1 || true
-        
-    - name: Upload logs
-      if: failure()
-      uses: actions/upload-artifact@v3
-      with:
-        name: test-logs
-        path: logs/
-        retention-days: 3
+        echo "=== Docker logs ==="
+        docker logs covid-api-test-isolated 2>/dev/null || echo "No container logs"
+        echo "=== Container status ==="
+        docker ps -a | grep covid || echo "No containers found"
